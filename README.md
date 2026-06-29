@@ -1,64 +1,50 @@
-# Nuxt Starter Template
+# PDF & Image Merger
 
 [![Nuxt UI](https://img.shields.io/badge/Made%20with-Nuxt%20UI-00DC82?logo=nuxt&labelColor=020420)](https://ui.nuxt.com)
 
-Use this template to get started with [Nuxt UI](https://ui.nuxt.com) quickly.
+A privacy-first tool to merge PDFs and images into a single PDF file — built with [Nuxt](https://nuxt.com) and [Nuxt UI](https://ui.nuxt.com), hosted at [pdf.ichbinbobby.de](https://pdf.ichbinbobby.de).
 
-- [Live demo](https://starter-template.nuxt.dev/)
-- [Documentation](https://ui.nuxt.com/docs/getting-started/installation/nuxt)
+## How it works
 
-<a href="https://starter-template.nuxt.dev/" target="_blank">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://ui.nuxt.com/assets/templates/nuxt/starter-dark.png">
-    <source media="(prefers-color-scheme: light)" srcset="https://ui.nuxt.com/assets/templates/nuxt/starter-light.png">
-    <img alt="Nuxt Starter Template" src="https://ui.nuxt.com/assets/templates/nuxt/starter-light.png" width="830" height="466">
-  </picture>
-</a>
+Everything runs in the browser. No files are ever uploaded to a server.
 
-> The starter template for Vue is on https://github.com/nuxt-ui-templates/starter-vue.
+1. **Add files** — drag and drop or click to browse. Supports PDF, JPG, PNG, and WebP.
+2. **Reorder** — drag items in the list to arrange them in the order you want.
+3. **Merge** — click the button to combine all files into one PDF and download it instantly.
 
-## Quick Start
+Under the hood, [pdf-lib](https://pdf-lib.js.org) handles all PDF operations client-side:
 
-```bash [Terminal]
-npm create nuxt@latest -- -t ui
-```
+- **PDFs** — pages are copied directly into the output document.
+- **JPEG images** — embedded as-is.
+- **PNG / WebP images** — converted to PNG via a canvas element, then embedded.
 
-## Deploy your own
+Each image becomes its own page, sized to the image's natural dimensions.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-name=starter&repository-url=https%3A%2F%2Fgithub.com%2Fnuxt-ui-templates%2Fstarter&demo-image=https%3A%2F%2Fui.nuxt.com%2Fassets%2Ftemplates%2Fnuxt%2Fstarter-dark.png&demo-url=https%3A%2F%2Fstarter-template.nuxt.dev%2F&demo-title=Nuxt%20Starter%20Template&demo-description=A%20minimal%20template%20to%20get%20started%20with%20Nuxt%20UI.)
+## Tech stack
+
+- [Nuxt 4](https://nuxt.com) — Vue framework with SSG, deployed to Vercel
+- [Nuxt UI 4](https://ui.nuxt.com) — component library built on Tailwind CSS v4
+- [pdf-lib](https://pdf-lib.js.org) — client-side PDF creation and manipulation
 
 ## Setup
-
-Make sure to install the dependencies:
 
 ```bash
 pnpm install
 ```
 
-## Development Server
-
-Start the development server on `http://localhost:3000`:
+## Development
 
 ```bash
 pnpm dev
 ```
 
-## Production
-
-Build the application for production:
+## Build & Preview
 
 ```bash
 pnpm build
-```
-
-Locally preview production build:
-
-```bash
 pnpm preview
 ```
 
-Check out the [deployment documentation](https://nuxt.com/docs/getting-started/deployment) for more information.
+## Author
 
-## Renovate integration
-
-Install [Renovate GitHub app](https://github.com/apps/renovate/installations/select_target) on your repository and you are good to go.
+[ichbinbobby](https://ichbinbobby.de)
