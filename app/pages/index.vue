@@ -18,6 +18,8 @@ const mergeError = ref<string | null>(null)
 const dragReorderIndex = ref(-1)
 const dragOverIndex = ref(-1)
 
+const OUTPUT_NAME_DEFAULT = 'MyMergedFiles'
+const outputName = ref(OUTPUT_NAME_DEFAULT)
 const canMerge = computed(() => files.value.length >= 1 && !isMerging.value)
 
 const totalPages = computed(() =>
@@ -211,7 +213,7 @@ async function merge() {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
-    a.download = 'merged.pdf'
+    a.download = `${outputName.value.trim() || OUTPUT_NAME_DEFAULT}.pdf`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -366,6 +368,20 @@ onUnmounted(() => {
       class="mb-4"
       :description="mergeError"
     />
+
+    <!-- Filename -->
+    <UInput
+      :model-value="outputName"
+      :disabled="isMerging"
+      :placeholder="OUTPUT_NAME_DEFAULT"
+      class="w-full mb-3"
+      :ui="{ trailing: 'pointer-events-none' }"
+      @update:model-value="outputName = $event"
+    >
+      <template #trailing>
+        <span class="text-gray-400 text-sm">.pdf</span>
+      </template>
+    </UInput>
 
     <!-- Action -->
     <UButton
