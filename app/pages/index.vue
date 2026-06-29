@@ -30,8 +30,13 @@ const mergeLabel = computed(() => {
   return 'Merge & Download PDF'
 })
 
+function isPdf(file: File) {
+  return file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')
+}
+
 function isValidType(file: File) {
-  return ['application/pdf', 'image/jpeg', 'image/png', 'image/webp'].includes(file.type)
+  if (isPdf(file)) return true
+  return ['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
 }
 
 function formatSize(bytes: number) {
@@ -60,7 +65,7 @@ async function processFiles(incoming: File[]) {
       file,
       name: file.name,
       size: file.size,
-      type: file.type === 'application/pdf' ? 'pdf' : 'image'
+      type: isPdf(file) ? 'pdf' : 'image'
     }
 
     if (item.type === 'image') {
