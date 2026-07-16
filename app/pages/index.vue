@@ -9,18 +9,40 @@ interface FileItem {
   previewUrl?: string
 }
 
+interface PageItem {
+  id: string
+  sourceFileId: string
+  sourceFileName: string
+  pageIndex: number
+  thumbnail: string
+  type: 'pdf-page' | 'image'
+  file: File
+}
+
 const fileInput = ref<HTMLInputElement>()
 const files = ref<FileItem[]>([])
 const isDragOver = ref(false)
+
+const isPageMode = ref(false)
+const pages = ref<PageItem[]>([])
+const isExpandingPages = ref(false)
+const expandProgress = ref({ current: 0, total: 0 })
+
 const isMerging = ref(false)
 const mergeError = ref<string | null>(null)
 
 const dragReorderIndex = ref(-1)
 const dragOverIndex = ref(-1)
+const dragPageSrcIndex = ref(-1)
+const dragPageOverIndex = ref(-1)
 
 const OUTPUT_NAME_DEFAULT = 'MyMergedFiles'
 const outputName = ref(OUTPUT_NAME_DEFAULT)
-const canMerge = computed(() => files.value.length >= 1 && !isMerging.value)
+
+const canMerge = computed(() => {
+  const count = isPageMode.value ? pages.value.length : files.value.length
+  return count >= 1 && !isMerging.value
+})
 
 const totalPages = computed(() =>
   files.value.reduce((sum, f) => sum + (f.pageCount ?? 1), 0)
@@ -28,7 +50,7 @@ const totalPages = computed(() =>
 
 const mergeLabel = computed(() => {
   if (isMerging.value) return 'Merging…'
-  if (files.value.length === 1) return 'Convert to PDF'
+  if (!isPageMode.value && files.value.length === 1) return 'Convert to PDF'
   return 'Merge & Download PDF'
 })
 
@@ -44,6 +66,15 @@ function isValidType(file: File) {
 function formatSize(bytes: number) {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+async function getPdfJs() {
+  const lib = await import('pdfjs-dist')
+  lib.GlobalWorkerOptions.workerSrc = new URL(
+    'pdfjs-dist/build/pdf.worker.min.mjs',
+    import.meta.url
+  ).href
+  return lib
 }
 
 async function getPdfPageCount(file: File): Promise<number> {
@@ -149,6 +180,116 @@ function onItemDragEnd() {
   dragOverIndex.value = -1
 }
 
+async function renderPageThumbnail(page: any): Promise<string> {
+  const THUMBNAIL_WIDTH = 200
+  const viewport = page.getViewport({ scale: 1 })
+  const scale = THUMBNAIL_WIDTH / viewport.width
+  const scaledViewport = page.getViewport({ scale })
+
+  const canvas = document.createElement('canvas')
+  canvas.width = scaledViewport.width
+  canvas.height = scaledViewport.height
+
+  await page.render({
+    canvasContext: canvas.getContext('2d')!,
+    viewport: scaledViewport
+  }).promise
+
+  return canvas.toDataURL('image/jpeg', 0.85)
+}
+
+async function expandToPages() {
+  isExpandingPages.value = true
+  mergeError.value = null
+
+  try {
+    const pdfjs = await getPdfJs()
+    const result: PageItem[] = []
+    const totalPageCount = files.value.reduce((sum, f) => sum + (f.pageCount ?? 1), 0)
+    expandProgress.value = { current: 0, total: totalPageCount }
+
+    for (const fileItem of files.value) {
+      if (fileItem.type === 'image') {
+        result.push({
+          id: crypto.randomUUID(),
+          sourceFileId: fileItem.id,
+          sourceFileName: fileItem.name,
+          pageIndex: 0,
+          thumbnail: fileItem.previewUrl!,
+          type: 'image',
+          file: fileItem.file
+        })
+        expandProgress.value.current++
+      } else {
+        const bytes = await fileItem.file.arrayBuffer()
+        const pdfDoc = await pdfjs.getDocument({ data: bytes }).promise
+
+        for (let i = 1; i <= pdfDoc.numPages; i++) {
+          const page = await pdfDoc.getPage(i)
+          const thumbnail = await renderPageThumbnail(page)
+          page.cleanup()
+          result.push({
+            id: crypto.randomUUID(),
+            sourceFileId: fileItem.id,
+            sourceFileName: fileItem.name,
+            pageIndex: i - 1,
+            thumbnail,
+            type: 'pdf-page',
+            file: fileItem.file
+          })
+          expandProgress.value.current++
+        }
+
+        await pdfDoc.cleanup()
+      }
+    }
+
+    pages.value = result
+    isPageMode.value = true
+  } catch (e) {
+    mergeError.value = e instanceof Error ? e.message : 'Failed to render pages.'
+  } finally {
+    isExpandingPages.value = false
+  }
+}
+
+function exitPageMode() {
+  isPageMode.value = false
+  pages.value = []
+}
+
+function removePage(id: string) {
+  const idx = pages.value.findIndex(p => p.id === id)
+  if (idx !== -1) pages.value.splice(idx, 1)
+}
+
+function onPageDragStart(e: DragEvent, index: number) {
+  dragPageSrcIndex.value = index
+  e.dataTransfer!.effectAllowed = 'move'
+  e.dataTransfer!.setData('text/plain', String(index))
+}
+
+function onPageDragOver(e: DragEvent, index: number) {
+  if (dragPageSrcIndex.value === -1) return
+  e.preventDefault()
+  dragPageOverIndex.value = index
+}
+
+function onPageDrop(e: DragEvent, targetIndex: number) {
+  e.preventDefault()
+  const src = dragPageSrcIndex.value
+  dragPageSrcIndex.value = -1
+  dragPageOverIndex.value = -1
+  if (src === -1 || src === targetIndex) return
+  const [page] = pages.value.splice(src, 1) as [PageItem]
+  pages.value.splice(targetIndex, 0, page)
+}
+
+function onPageDragEnd() {
+  dragPageSrcIndex.value = -1
+  dragPageOverIndex.value = -1
+}
+
 function convertImageToPng(file: File): Promise<Uint8Array> {
   return new Promise((resolve, reject) => {
     const img = new Image()
@@ -174,6 +315,24 @@ function convertImageToPng(file: File): Promise<Uint8Array> {
   })
 }
 
+async function addImagePage(doc: any, file: File) {
+  let imageBytes: Uint8Array
+  let embedMethod: 'embedJpg' | 'embedPng'
+
+  if (file.type === 'image/jpeg') {
+    imageBytes = new Uint8Array(await file.arrayBuffer())
+    embedMethod = 'embedJpg'
+  } else {
+    imageBytes = await convertImageToPng(file)
+    embedMethod = 'embedPng'
+  }
+
+  const image = await doc[embedMethod](imageBytes)
+  const { width, height } = image.scale(1)
+  const page = doc.addPage([width, height])
+  page.drawImage(image, { x: 0, y: 0, width, height })
+}
+
 async function merge() {
   if (!canMerge.value) return
   mergeError.value = null
@@ -183,28 +342,31 @@ async function merge() {
     const { PDFDocument } = await import('pdf-lib')
     const merged = await PDFDocument.create()
 
-    for (const item of files.value) {
-      if (item.type === 'pdf') {
-        const bytes = new Uint8Array(await item.file.arrayBuffer())
-        const pdf = await PDFDocument.load(bytes)
-        const pages = await merged.copyPages(pdf, pdf.getPageIndices())
-        pages.forEach(p => merged.addPage(p))
-      } else {
-        let imageBytes: Uint8Array
-        let embedMethod: 'embedJpg' | 'embedPng'
-
-        if (item.file.type === 'image/jpeg') {
-          imageBytes = new Uint8Array(await item.file.arrayBuffer())
-          embedMethod = 'embedJpg'
+    if (isPageMode.value) {
+      const pdfLibCache = new Map<string, any>()
+      for (const page of pages.value) {
+        if (page.type === 'pdf-page') {
+          if (!pdfLibCache.has(page.sourceFileId)) {
+            const bytes = new Uint8Array(await page.file.arrayBuffer())
+            pdfLibCache.set(page.sourceFileId, await PDFDocument.load(bytes))
+          }
+          const srcPdf = pdfLibCache.get(page.sourceFileId)
+          const [copiedPage] = await merged.copyPages(srcPdf, [page.pageIndex])
+          merged.addPage(copiedPage)
         } else {
-          imageBytes = await convertImageToPng(item.file)
-          embedMethod = 'embedPng'
+          await addImagePage(merged, page.file)
         }
-
-        const image = await merged[embedMethod](imageBytes)
-        const { width, height } = image.scale(1)
-        const page = merged.addPage([width, height])
-        page.drawImage(image, { x: 0, y: 0, width, height })
+      }
+    } else {
+      for (const item of files.value) {
+        if (item.type === 'pdf') {
+          const bytes = new Uint8Array(await item.file.arrayBuffer())
+          const pdf = await PDFDocument.load(bytes)
+          const copiedPages = await merged.copyPages(pdf, pdf.getPageIndices())
+          copiedPages.forEach(p => merged.addPage(p))
+        } else {
+          await addImagePage(merged, item.file)
+        }
       }
     }
 
@@ -234,133 +396,217 @@ onUnmounted(() => {
 
 <template>
   <UContainer class="py-12 max-w-2xl">
-    <div class="text-center mb-10">
-      <h1 class="text-4xl font-bold tracking-tight text-gray-900 dark:text-white mb-3">
-        PDF & Image Merger
-      </h1>
-      <p class="text-lg text-gray-500 dark:text-gray-400">
-        Merge PDFs and images into a single PDF — entirely in your browser
-      </p>
-    </div>
 
-    <!-- Drop Zone -->
-    <div
-      class="border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-colors mb-6"
-      :class="isDragOver
-        ? 'border-primary-500 bg-primary-50 dark:bg-primary-950'
-        : 'border-gray-300 dark:border-gray-700 hover:border-primary-400 dark:hover:border-primary-500'"
-      @click="openFilePicker"
-      @dragover.prevent="onDropZoneDragOver"
-      @dragleave="isDragOver = false"
-      @drop.prevent="onDropZoneDrop"
-    >
-      <UIcon
-        name="i-lucide-upload-cloud"
-        class="w-10 h-10 mx-auto mb-3 transition-colors"
-        :class="isDragOver ? 'text-primary-500' : 'text-gray-400'"
-      />
-      <p class="text-base font-medium text-gray-700 dark:text-gray-300 mb-1">
-        Drop files here or
-        <span class="text-primary-600 dark:text-primary-400">click to browse</span>
-      </p>
-      <p class="text-sm text-gray-400 dark:text-gray-500">
-        PDF, JPG, PNG, WebP
-      </p>
-    </div>
-
-    <input
-      ref="fileInput"
-      type="file"
-      multiple
-      accept=".pdf,image/jpeg,image/png,image/webp"
-      class="hidden"
-      @change="onFileInputChange"
-    >
-
-    <!-- File List -->
-    <div
-      v-if="files.length > 0"
-      class="mb-6"
-    >
-      <div class="flex items-center justify-between mb-3">
-        <p class="text-sm text-gray-500 dark:text-gray-400">
-          {{ files.length }} file{{ files.length === 1 ? '' : 's' }}
-          <span v-if="totalPages > 0"> · {{ totalPages }} page{{ totalPages === 1 ? '' : 's' }}</span>
+    <!-- SIMPLE MODE -->
+    <template v-if="!isPageMode">
+      <div class="text-center mb-10">
+        <h1 class="text-4xl font-bold tracking-tight text-gray-900 dark:text-white mb-3">
+          PDF & Image Merger
+        </h1>
+        <p class="text-lg text-gray-500 dark:text-gray-400">
+          Merge PDFs and images into a single PDF — entirely in your browser
         </p>
-        <UButton
-          variant="ghost"
-          size="xs"
-          color="neutral"
-          @click="clearAll"
-        >
-          Clear all
-        </UButton>
       </div>
 
-      <div class="space-y-2">
-        <div
-          v-for="(item, index) in files"
-          :key="item.id"
-          draggable="true"
-          class="flex items-center gap-3 px-3 py-2.5 bg-white dark:bg-gray-900 border rounded-xl transition-all select-none"
-          :class="{
-            'border-primary-400 ring-2 ring-primary-200 dark:ring-primary-900': dragOverIndex === index && dragReorderIndex !== index,
-            'opacity-30 scale-[0.98]': dragReorderIndex === index,
-            'border-gray-200 dark:border-gray-800': dragOverIndex !== index || dragReorderIndex === index
-          }"
-          @dragstart="onItemDragStart($event, index)"
-          @dragover="onItemDragOver($event, index)"
-          @drop="onItemDrop($event, index)"
-          @dragend="onItemDragEnd"
-        >
-          <UIcon
-            name="i-lucide-grip-vertical"
-            class="w-4 h-4 text-gray-300 dark:text-gray-600 flex-shrink-0 cursor-grab active:cursor-grabbing"
-          />
+      <div
+        class="border-2 border-dashed rounded-xl p-12 text-center cursor-pointer transition-colors mb-6"
+        :class="isDragOver
+          ? 'border-primary-500 bg-primary-50 dark:bg-primary-950'
+          : 'border-gray-300 dark:border-gray-700 hover:border-primary-400 dark:hover:border-primary-500'"
+        @click="openFilePicker"
+        @dragover.prevent="onDropZoneDragOver"
+        @dragleave="isDragOver = false"
+        @drop.prevent="onDropZoneDrop"
+      >
+        <UIcon
+          name="i-lucide-upload-cloud"
+          class="w-10 h-10 mx-auto mb-3 transition-colors"
+          :class="isDragOver ? 'text-primary-500' : 'text-gray-400'"
+        />
+        <p class="text-base font-medium text-gray-700 dark:text-gray-300 mb-1">
+          Drop files here or
+          <span class="text-primary-600 dark:text-primary-400">click to browse</span>
+        </p>
+        <p class="text-sm text-gray-400 dark:text-gray-500">
+          PDF, JPG, PNG, WebP
+        </p>
+      </div>
 
-          <div class="w-9 h-9 flex-shrink-0 rounded-lg overflow-hidden flex items-center justify-center bg-gray-100 dark:bg-gray-800">
-            <img
-              v-if="item.previewUrl"
-              :src="item.previewUrl"
-              :alt="item.name"
-              class="w-full h-full object-cover"
-            >
-            <UIcon
-              v-else
-              name="i-lucide-file-text"
-              class="w-5 h-5 text-red-500"
-            />
-          </div>
+      <input
+        ref="fileInput"
+        type="file"
+        multiple
+        accept=".pdf,image/jpeg,image/png,image/webp"
+        class="hidden"
+        @change="onFileInputChange"
+      >
 
-          <div class="flex-1 min-w-0">
-            <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
-              {{ item.name }}
-            </p>
-            <p class="text-xs text-gray-400 dark:text-gray-500">
-              {{ formatSize(item.size) }}<span v-if="item.pageCount !== undefined"> · {{ item.pageCount }} page{{ item.pageCount === 1 ? '' : 's' }}</span><span
-                v-else-if="item.type === 'pdf'"
-                class="italic"
-              > · counting…</span>
-            </p>
-          </div>
-
+      <div v-if="files.length > 0" class="mb-4">
+        <div class="flex items-center justify-between mb-3">
+          <p class="text-sm text-gray-500 dark:text-gray-400">
+            {{ files.length }} file{{ files.length === 1 ? '' : 's' }}<span v-if="totalPages > 0"> · {{ totalPages }} page{{ totalPages === 1 ? '' : 's' }}</span>
+          </p>
           <UButton
             variant="ghost"
             size="xs"
             color="neutral"
-            icon="i-lucide-x"
-            class="flex-shrink-0"
-            @click.stop="removeFile(item.id)"
-          />
+            @click="clearAll"
+          >
+            Clear all
+          </UButton>
+        </div>
+
+        <div class="space-y-2">
+          <div
+            v-for="(item, index) in files"
+            :key="item.id"
+            draggable="true"
+            class="flex items-center gap-3 px-3 py-2.5 bg-white dark:bg-gray-900 border rounded-xl transition-all select-none"
+            :class="{
+              'border-primary-400 ring-2 ring-primary-200 dark:ring-primary-900': dragOverIndex === index && dragReorderIndex !== index,
+              'opacity-30 scale-[0.98]': dragReorderIndex === index,
+              'border-gray-200 dark:border-gray-800': dragOverIndex !== index || dragReorderIndex === index
+            }"
+            @dragstart="onItemDragStart($event, index)"
+            @dragover="onItemDragOver($event, index)"
+            @drop="onItemDrop($event, index)"
+            @dragend="onItemDragEnd"
+          >
+            <UIcon
+              name="i-lucide-grip-vertical"
+              class="w-4 h-4 text-gray-300 dark:text-gray-600 flex-shrink-0 cursor-grab active:cursor-grabbing"
+            />
+
+            <div class="w-9 h-9 flex-shrink-0 rounded-lg overflow-hidden flex items-center justify-center bg-gray-100 dark:bg-gray-800">
+              <img
+                v-if="item.previewUrl"
+                :src="item.previewUrl"
+                :alt="item.name"
+                class="w-full h-full object-cover"
+              >
+              <UIcon
+                v-else
+                name="i-lucide-file-text"
+                class="w-5 h-5 text-red-500"
+              />
+            </div>
+
+            <div class="flex-1 min-w-0">
+              <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate">
+                {{ item.name }}
+              </p>
+              <p class="text-xs text-gray-400 dark:text-gray-500">
+                {{ formatSize(item.size) }}<span v-if="item.pageCount !== undefined"> · {{ item.pageCount }} page{{ item.pageCount === 1 ? '' : 's' }}</span><span
+                  v-else-if="item.type === 'pdf'"
+                  class="italic"
+                > · counting…</span>
+              </p>
+            </div>
+
+            <UButton
+              variant="ghost"
+              size="xs"
+              color="neutral"
+              icon="i-lucide-x"
+              class="flex-shrink-0"
+              @click.stop="removeFile(item.id)"
+            />
+          </div>
+        </div>
+
+        <div class="flex items-center justify-between mt-3">
+          <p class="text-xs text-gray-400 dark:text-gray-500">
+            Drag to reorder
+          </p>
+          <div class="flex items-center gap-2">
+            <p
+              v-if="isExpandingPages"
+              class="text-xs text-gray-400 dark:text-gray-500"
+            >
+              Rendering {{ expandProgress.current }}/{{ expandProgress.total }}…
+            </p>
+            <UButton
+              variant="outline"
+              size="xs"
+              color="neutral"
+              icon="i-lucide-layers"
+              :loading="isExpandingPages"
+              @click="expandToPages"
+            >
+              Rearrange pages
+            </UButton>
+          </div>
         </div>
       </div>
+    </template>
 
-      <p class="text-xs text-gray-400 dark:text-gray-500 mt-2 text-center">
-        Drag items to reorder
-      </p>
-    </div>
+    <!-- PAGE MODE -->
+    <template v-else>
+      <div class="flex items-center justify-between mb-6">
+        <UButton
+          variant="ghost"
+          size="sm"
+          color="neutral"
+          icon="i-lucide-arrow-left"
+          @click="exitPageMode"
+        >
+          Back to files
+        </UButton>
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          {{ pages.length }} page{{ pages.length === 1 ? '' : 's' }} · drag to reorder
+        </p>
+      </div>
 
-    <!-- Error -->
+      <div class="grid grid-cols-3 sm:grid-cols-4 gap-3 mb-6">
+        <div
+          v-for="(page, index) in pages"
+          :key="page.id"
+          draggable="true"
+          class="cursor-grab active:cursor-grabbing select-none"
+          :class="{
+            'opacity-30 scale-95': dragPageSrcIndex === index,
+            'ring-2 ring-primary-400 rounded-xl': dragPageOverIndex === index && dragPageSrcIndex !== index
+          }"
+          @dragstart="onPageDragStart($event, index)"
+          @dragover="onPageDragOver($event, index)"
+          @drop="onPageDrop($event, index)"
+          @dragend="onPageDragEnd"
+        >
+          <div class="relative group rounded-lg overflow-hidden border border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800">
+            <img
+              :src="page.thumbnail"
+              :alt="`${page.sourceFileName} page ${page.pageIndex + 1}`"
+              class="w-full block"
+            >
+            <div class="absolute inset-0 bg-black/0 group-hover:bg-black/10 transition-colors" />
+            <button
+              class="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/50 text-white flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
+              @click.stop="removePage(page.id)"
+            >
+              <UIcon
+                name="i-lucide-x"
+                class="w-3 h-3"
+              />
+            </button>
+            <div class="absolute bottom-1 left-1 text-[10px] leading-none bg-black/50 text-white px-1 py-0.5 rounded">
+              {{ index + 1 }}
+            </div>
+          </div>
+          <p class="text-[11px] text-gray-500 dark:text-gray-400 truncate mt-1 text-center leading-tight">
+            {{ page.sourceFileName }}
+          </p>
+          <p
+            v-if="page.type === 'pdf-page'"
+            class="text-[11px] text-gray-400 dark:text-gray-500 text-center leading-tight"
+          >
+            p. {{ page.pageIndex + 1 }}
+          </p>
+        </div>
+      </div>
+    </template>
+
+    <!-- SHARED -->
+
     <UAlert
       v-if="mergeError"
       color="error"
@@ -369,7 +615,6 @@ onUnmounted(() => {
       :description="mergeError"
     />
 
-    <!-- Filename -->
     <UInput
       :model-value="outputName"
       :disabled="isMerging"
@@ -383,7 +628,6 @@ onUnmounted(() => {
       </template>
     </UInput>
 
-    <!-- Action -->
     <UButton
       size="lg"
       class="w-full justify-center"
@@ -396,7 +640,7 @@ onUnmounted(() => {
     </UButton>
 
     <p
-      v-if="files.length === 0"
+      v-if="files.length === 0 && !isPageMode"
       class="text-xs text-center text-gray-400 dark:text-gray-500 mt-3"
     >
       Your files never leave your browser — all processing is done locally
