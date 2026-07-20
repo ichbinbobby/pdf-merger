@@ -11,15 +11,15 @@
     "typecheck": "nuxt typecheck"
   },
   "dependencies": {
-    "@iconify-json/lucide": "^1.2.117",
-    "@iconify-json/simple-icons": "^1.2.90",
+    "@iconify-json/lucide": "^1.2.118",
+    "@iconify-json/simple-icons": "^1.2.91",
     "@nuxt/ui": "^4.10.0",
     "@nuxtjs/eslint-module": "4.1.0",
     "@oro.ad/nuxt-claude-devtools": "1.5.2",
-    "nuxt": "^4.4.8",
+    "nuxt": "^4.5.0",
     "pdf-lib": "^1.17.1",
     "pdfjs-dist": "^6.1.200",
-    "tailwindcss": "^4.3.2"
+    "tailwindcss": "^4.3.3"
   },
   "devDependencies": {
     "@nuxt/eslint": "^1.16.0",
@@ -27,5 +27,5 @@
     "typescript": "^7.0.2",
     "vue-tsc": "^3.3.7"
   },
-  "packageManager": "pnpm@11.13.1"
+  "packageManager": "pnpm@11.15.1"
 }

@@ -6,3 +6,4 @@ allowBuilds:
   vue-demi: false
 minimumReleaseAgeExclude:
   - '@nuxt/ui@4.10.0'
+  - '@iconify-json/simple-icons@1.2.91'
